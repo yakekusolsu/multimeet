@@ -14,10 +14,19 @@ export function OutputPage() {
       const config = await api.config();
       meeting = new MeetingPeer(token, config, null, 'output', {
         onStream: (_id, stream) => {
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            void videoRef.current.play();
-          }
+          const video = videoRef.current;
+          if (!video || video.srcObject === stream) return;
+          video.srcObject = stream;
+          video.muted = false;
+          video.volume = 1;
+          const play = () =>
+            video.play().catch(async () => {
+              // 通常BrowserのAutoplay制限時も映像だけは停止させない。OBSでは通常この分岐に入らない。
+              video.muted = true;
+              await video.play();
+            });
+          if (video.readyState >= HTMLMediaElement.HAVE_METADATA) void play();
+          else video.onloadedmetadata = () => void play();
         },
         onError: setError,
         onEnded: () => setError('Room ended'),

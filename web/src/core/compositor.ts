@@ -20,7 +20,8 @@ export class VideoCompositor {
   private readonly context: CanvasRenderingContext2D;
   private readonly videos = new Map<string, HTMLVideoElement>();
   private sources: CompositeSource[] = [];
-  private frameRequest = 0;
+  private frameTimer = 0;
+  private running = false;
   private pinnedId: string | null = null;
   private soloId: string | null = null;
   private backgroundImage: HTMLImageElement | null = null;
@@ -30,7 +31,7 @@ export class VideoCompositor {
     canvas?: HTMLCanvasElement,
   ) {
     this.canvas = canvas ?? document.createElement('canvas');
-    const context = this.canvas.getContext('2d', { alpha: false });
+    const context = this.canvas.getContext('2d', { alpha: false, desynchronized: true });
     if (!context) throw new Error('Canvas 2Dを初期化できません。');
     this.context = context;
     this.applySettings(settings);
@@ -41,6 +42,7 @@ export class VideoCompositor {
   }
 
   applySettings(settings: VisualSettings): void {
+    const fpsChanged = this.settings?.fps !== settings.fps;
     this.settings = settings;
     const size = OUTPUT_SIZES[settings.outputSize];
     this.canvas.width = size.width;
@@ -48,6 +50,7 @@ export class VideoCompositor {
     this.backgroundImage = settings.backgroundImage
       ? Object.assign(new Image(), { src: settings.backgroundImage })
       : null;
+    if (this.running && fpsChanged) this.restartTimer();
   }
 
   setSources(sources: CompositeSource[]): void {
@@ -93,14 +96,18 @@ export class VideoCompositor {
   }
 
   start(): void {
-    if (!this.frameRequest) this.draw();
+    if (this.running) return;
+    this.running = true;
+    this.drawFrame();
+    this.scheduleFrame();
   }
   stop(): void {
-    cancelAnimationFrame(this.frameRequest);
-    this.frameRequest = 0;
+    this.running = false;
+    window.clearTimeout(this.frameTimer);
+    this.frameTimer = 0;
   }
 
-  private draw = (): void => {
+  private drawFrame(): void {
     const { width, height } = this.canvas;
     this.context.fillStyle = this.settings.background;
     this.context.fillRect(0, 0, width, height);
@@ -114,8 +121,22 @@ export class VideoCompositor {
       ? layoutRects(visible.length, width, height)
       : pinnedRects(visible.length, width, height, pinnedIndex);
     visible.forEach((source, index) => this.drawSource(source, rects[index]!));
-    this.frameRequest = requestAnimationFrame(this.draw);
-  };
+  }
+
+  private scheduleFrame(): void {
+    if (!this.running) return;
+    const delay = Math.max(8, Math.round(1_000 / this.settings.fps));
+    this.frameTimer = window.setTimeout(() => {
+      this.drawFrame();
+      this.scheduleFrame();
+    }, delay);
+  }
+
+  private restartTimer(): void {
+    window.clearTimeout(this.frameTimer);
+    this.frameTimer = 0;
+    this.scheduleFrame();
+  }
 
   private drawSource(source: CompositeSource, rect: Rect): void {
     const video = this.videos.get(source.id);

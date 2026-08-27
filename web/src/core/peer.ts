@@ -22,6 +22,7 @@ export interface MeetingHandlers {
 export class MeetingPeer {
   readonly socket: MeetingSocket;
   private readonly peers = new Map<string, RTCPeerConnection>();
+  private readonly pendingOutputPeers = new Set<string>();
   private readonly statsTimers = new Map<string, number>();
   private pingTimer = 0;
 
@@ -69,12 +70,28 @@ export class MeetingPeer {
 
   async sendCompositeToOutput(outputId: string, stream: MediaStream): Promise<void> {
     if (this.role !== 'host') return;
-    this.closePeer(outputId);
-    const peer = this.createPeer(outputId);
-    stream.getTracks().forEach((track) => peer.addTrack(track, stream));
-    const offer = await peer.createOffer();
-    await peer.setLocalDescription(offer);
-    this.socket.emit('signal', { target: outputId, description: peer.localDescription! });
+    const existing = this.peers.get(outputId);
+    if (
+      this.pendingOutputPeers.has(outputId) ||
+      (existing && !['failed', 'closed'].includes(existing.connectionState))
+    )
+      return;
+    if (existing) this.closePeer(outputId);
+
+    this.pendingOutputPeers.add(outputId);
+    try {
+      const peer = this.createPeer(outputId);
+      const senders = stream.getTracks().map((track) => peer.addTrack(track, stream));
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      await this.configureOutputSenders(senders);
+      this.socket.emit('signal', { target: outputId, description: peer.localDescription! });
+    } catch (error) {
+      this.closePeer(outputId);
+      throw error;
+    } finally {
+      this.pendingOutputPeers.delete(outputId);
+    }
   }
 
   replaceTrack(kind: 'audio' | 'video', track: MediaStreamTrack): void {
@@ -112,15 +129,6 @@ export class MeetingPeer {
     this.socket.on('participant-left', (id: string) => {
       this.closePeer(id);
       this.handlers.onParticipantLeft?.(id);
-    });
-    this.socket.on('participant-joined', (participant: ParticipantSummary) => {
-      if (this.role === 'host' && participant.role === 'output')
-        this.handlers.onRoomState?.({
-          id: '',
-          participants: [participant],
-          maxParticipants: 6,
-          createdAt: Date.now(),
-        });
     });
     this.socket.on('admin-action', (action: Parameters<ServerToClientEvents['admin-action']>[0]) =>
       this.handlers.onAdminAction?.(action),
@@ -202,7 +210,31 @@ export class MeetingPeer {
     this.statsTimers.set(id, timer);
   }
 
+  private async configureOutputSenders(senders: RTCRtpSender[]): Promise<void> {
+    for (const sender of senders) {
+      const track = sender.track;
+      if (!track) continue;
+      const parameters = sender.getParameters();
+      if (!parameters.encodings.length) parameters.encodings = [{}];
+
+      if (track.kind === 'video') {
+        track.contentHint = 'motion';
+        const settings = track.getSettings();
+        const width = settings.width ?? 1280;
+        parameters.degradationPreference = 'maintain-resolution';
+        parameters.encodings[0]!.maxBitrate = width >= 1920 ? 12_000_000 : 6_000_000;
+        parameters.encodings[0]!.maxFramerate = settings.frameRate ?? 30;
+        parameters.encodings[0]!.scaleResolutionDownBy = 1;
+      } else if (track.kind === 'audio') {
+        parameters.encodings[0]!.maxBitrate = 192_000;
+      }
+
+      await sender.setParameters(parameters).catch(() => undefined);
+    }
+  }
+
   private closePeer(id: string): void {
+    this.pendingOutputPeers.delete(id);
     const timer = this.statsTimers.get(id);
     if (timer) window.clearInterval(timer);
     this.statsTimers.delete(id);
