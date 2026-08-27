@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "MultiMeet for OmeTV",
+  "version": "1.0.0",
+  "description": "最大6人の映像と音声を1つに合成してOmeTVへ提供します。",
+  "minimum_chrome_version": "120",
+  "permissions": ["activeTab", "storage", "tabs"],
+  "host_permissions": ["https://ome.tv/*", "https://*.ome.tv/*", "http://localhost:3000/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "MultiMeet" },
+  "content_scripts": [
+    {
+      "matches": ["https://ome.tv/*", "https://*.ome.tv/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": ["https://ome.tv/*", "https://*.ome.tv/*"],
+      "js": ["ometv-provider.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'self'" }
+}

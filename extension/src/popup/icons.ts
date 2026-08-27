@@ -1,0 +1,10 @@
+export { default as Camera } from 'lucide-react/dist/esm/icons/camera.js';
+export { default as CameraOff } from 'lucide-react/dist/esm/icons/camera-off.js';
+export { default as Copy } from 'lucide-react/dist/esm/icons/copy.js';
+export { default as GripVertical } from 'lucide-react/dist/esm/icons/grip-vertical.js';
+export { default as LogOut } from 'lucide-react/dist/esm/icons/log-out.js';
+export { default as Mic } from 'lucide-react/dist/esm/icons/mic.js';
+export { default as MicOff } from 'lucide-react/dist/esm/icons/mic-off.js';
+export { default as Pin } from 'lucide-react/dist/esm/icons/pin.js';
+export { default as UserMinus } from 'lucide-react/dist/esm/icons/user-minus.js';
+export { default as Users } from 'lucide-react/dist/esm/icons/users.js';

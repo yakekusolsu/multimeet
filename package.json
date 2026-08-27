@@ -1,0 +1,30 @@
+{
+  "name": "multimeet",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "server",
+    "web",
+    "extension"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web,extension -c blue,green,magenta \"npm run dev -w @multimeet/server\" \"npm run dev -w @multimeet/web\" \"npm run dev -w @multimeet/extension\"",
+    "build": "npm run build -w @multimeet/shared && npm run build -w @multimeet/server && npm run build -w @multimeet/web && npm run build -w @multimeet/extension",
+    "test": "npm run test -w @multimeet/shared && npm run test -w @multimeet/server && npm run test -w @multimeet/web",
+    "lint": "eslint . --max-warnings 0",
+    "format": "prettier --write .",
+    "typecheck": "npm run typecheck -ws --if-present"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "concurrently": "^9.1.0",
+    "eslint": "^9.17.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "typescript-eslint": "^8.19.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
