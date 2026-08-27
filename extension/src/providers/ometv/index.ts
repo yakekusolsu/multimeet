@@ -11,8 +11,12 @@ import type { ExtensionState, ProviderCommand } from '../../types';
 
 const nativeGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
 const nativeAddTrack = RTCPeerConnection.prototype.addTrack;
+const nativeAddTransceiver = RTCPeerConnection.prototype.addTransceiver;
+const nativeReplaceTrack = RTCRtpSender.prototype.replaceTrack;
 const existingSitePeers = new Set<RTCPeerConnection>();
 const originalSenderTracks = new Map<RTCRtpSender, MediaStreamTrack>();
+const originalPreviewStreams = new Map<HTMLVideoElement, MediaStream>();
+const compositePreviewStreams = new Map<HTMLVideoElement, MediaStream>();
 const state: ExtensionState = {
   active: false,
   participants: [],
@@ -25,6 +29,7 @@ let compositeStream: MediaStream | null = null;
 let compositor: VideoCompositor | null = null;
 let mixer: AudioMixer | null = null;
 let peer: MeetingPeer | null = null;
+let previewSyncTimer = 0;
 const remoteStreams = new Map<string, MediaStream>();
 let settings: VisualSettings = {
   outputSize: '720p',
@@ -45,6 +50,27 @@ RTCPeerConnection.prototype.addTrack = function (
   return sender;
 };
 
+RTCPeerConnection.prototype.addTransceiver = function (
+  trackOrKind: string | MediaStreamTrack,
+  init?: RTCRtpTransceiverInit,
+): RTCRtpTransceiver {
+  const transceiver =
+    typeof trackOrKind === 'string'
+      ? nativeAddTransceiver.call(this, trackOrKind, init)
+      : nativeAddTransceiver.call(this, trackOrKind, init);
+  if (!state.active) {
+    existingSitePeers.add(this);
+    if (trackOrKind instanceof MediaStreamTrack)
+      originalSenderTracks.set(transceiver.sender, trackOrKind);
+  }
+  return transceiver;
+};
+
+RTCRtpSender.prototype.replaceTrack = function (withTrack: MediaStreamTrack | null): Promise<void> {
+  if (!state.active && withTrack) originalSenderTracks.set(this, withTrack);
+  return nativeReplaceTrack.call(this, withTrack);
+};
+
 async function attachCompositeToExistingSitePeers(): Promise<void> {
   if (!compositeStream) return;
   for (const sitePeer of existingSitePeers) {
@@ -58,6 +84,61 @@ async function attachCompositeToExistingSitePeers(): Promise<void> {
       if (replacement) await sender.replaceTrack(replacement.clone()).catch(() => undefined);
     }
   }
+}
+
+function syncCompositeToOmeTvPreview(): void {
+  if (!state.active || !compositeStream) return;
+  const originalVideoTrackIds = new Set(
+    [...originalSenderTracks.values()]
+      .filter((track) => track.kind === 'video')
+      .map((track) => track.id),
+  );
+
+  for (const video of document.querySelectorAll('video')) {
+    const replacement = compositePreviewStreams.get(video);
+    if (replacement) {
+      if (video.srcObject !== replacement) video.srcObject = replacement;
+      continue;
+    }
+
+    const current = video.srcObject;
+    if (!(current instanceof MediaStream)) continue;
+    const isLocalPreview = current
+      .getVideoTracks()
+      .some((track) => originalVideoTrackIds.has(track.id));
+    if (!isLocalPreview) continue;
+
+    const previewStream = new MediaStream(
+      compositeStream.getVideoTracks().map((track) => track.clone()),
+    );
+    originalPreviewStreams.set(video, current);
+    compositePreviewStreams.set(video, previewStream);
+    video.srcObject = previewStream;
+    video.muted = true;
+    video.playsInline = true;
+    void video.play().catch(() => undefined);
+  }
+}
+
+function startPreviewSync(): void {
+  window.clearInterval(previewSyncTimer);
+  syncCompositeToOmeTvPreview();
+  previewSyncTimer = window.setInterval(syncCompositeToOmeTvPreview, 1_000);
+}
+
+function restoreOmeTvPreviews(): void {
+  window.clearInterval(previewSyncTimer);
+  previewSyncTimer = 0;
+  for (const [video, original] of originalPreviewStreams) {
+    const replacement = compositePreviewStreams.get(video);
+    if (video.isConnected && video.srcObject === replacement) {
+      video.srcObject = original;
+      void video.play().catch(() => undefined);
+    }
+  }
+  compositePreviewStreams.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
+  compositePreviewStreams.clear();
+  originalPreviewStreams.clear();
 }
 
 function publish(): void {
@@ -157,6 +238,7 @@ async function createRoom(command: Extract<ProviderCommand, { type: 'create' }>)
   state.inviteUrl = room.inviteUrl;
   state.error = undefined;
   await attachCompositeToExistingSitePeers();
+  startPreviewSync();
   publish();
 }
 
@@ -166,6 +248,7 @@ async function endRoom(notifyServer = true): Promise<void> {
       method: 'DELETE',
       headers: { authorization: `Bearer ${room.hostToken}` },
     }).catch(() => undefined);
+  restoreOmeTvPreviews();
   for (const sitePeer of existingSitePeers)
     for (const sender of sitePeer.getSenders()) {
       const original = originalSenderTracks.get(sender);

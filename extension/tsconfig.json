@@ -11,6 +11,5 @@
     "types": ["chrome", "vite/client"],
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "../web/src/core", "../shared/src"],
-  "exclude": ["../web/src/**/*.test.ts", "../shared/src/**/*.test.ts"]
+  "include": ["src"]
 }
